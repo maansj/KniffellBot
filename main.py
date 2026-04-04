@@ -118,10 +118,25 @@ def cmd_interactive(args):
         else:
             dice = _ask_dice("  Enter your initial roll (5 numbers separated by spaces): ")
 
-        throw_num = 1
+        throw_num     = 1
+        decision_made = False
 
         while throw_num <= 4:
+            # If no slots are available yet at this throw, must keep rolling
+            from kniffel.constants import NUM_COLS
+            has_valid_slot = any(
+                board.valid_rows_for_col(c, throw_num) for c in range(NUM_COLS)
+            )
+            if not has_valid_slot and throw_num < 4:
+                print(f"\n  ⚠️  No slots available at throw {throw_num} — all Wurf {throw_num} columns are full.")
+                print(f"  Advancing to throw {throw_num + 1} to unlock Wurf {throw_num + 1} columns...")
+                if digital:
+                    dice = roll_dice() if not decision_made else dice
+                throw_num += 1
+                continue
+
             decision = bot.decide_reroll(board, dice, throw_num)
+            decision_made = True
             print(f"\n  🤖 Bot says: {decision.reasoning}")
 
             if not decision.reroll:
@@ -176,9 +191,9 @@ def cmd_interactive(args):
 
         agree = input("  Accept placement? [Y/n]: ").strip().lower()
         if agree in ("", "y"):
-            board.fill(placement.col_idx, placement.row_idx, dice)
+            board.fill(placement.col_idx, placement.row_idx, dice, throw_num)
         else:
-            _manual_placement(board, dice)
+            _manual_placement(board, dice, throw_num)
 
     print("\n" + board.display())
     print(f"\n🏆  Final grand total: {board.grand_total()} pts")
@@ -195,12 +210,12 @@ def _ask_dice(prompt: str) -> list[int]:
             print("  Invalid input — use space-separated integers.")
 
 
-def _manual_placement(board: Board, dice: list[int]):
+def _manual_placement(board: Board, dice: list[int], current_throw: int = 1):
     """Ask human to pick a column and row manually."""
     print("  Available placements:")
     options = []
     for c in range(len(COLUMNS)):
-        for r in board.valid_rows_for_col(c):
+        for r in board.valid_rows_for_col(c, current_throw):
             throw_n, ctype = COLUMNS[c]
             sym = {DOWN: "↓", UP: "↑", FREE: "F"}[ctype]
             row_name = ALL_ROWS[r]
@@ -214,7 +229,7 @@ def _manual_placement(board: Board, dice: list[int]):
             idx = int(input("  Choose option number: "))
             if 0 <= idx < len(options):
                 c, r = options[idx]
-                board.fill(c, r, dice)
+                board.fill(c, r, dice, current_throw)
                 return
         except ValueError:
             pass

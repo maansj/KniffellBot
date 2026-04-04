@@ -125,7 +125,7 @@ def _bonus_boost(board: Board, col_idx: int, row_idx: int, dice: list[int]) -> f
     return UPPER_BONUS_VALUE * reach_ratio * bonus_fraction * 0.5  # dampened
 
 
-def _column_urgency(board: Board, col_idx: int) -> float:
+def _column_urgency(board: Board, col_idx: int, current_throw: int = 1) -> float:
     """
     DOWN/UP columns have mandatory ordering, so filling them is more
     urgent than FREE columns. Returns a small multiplier (1.0–1.2).
@@ -133,7 +133,7 @@ def _column_urgency(board: Board, col_idx: int) -> float:
     col_type = COLUMNS[col_idx][1]
     if col_type == FREE:
         return 1.0
-    valid = board.valid_rows_for_col(col_idx)
+    valid = board.valid_rows_for_col(col_idx, current_throw)
     if not valid:
         return 1.0
     # If we must place in a high-value row next, boost urgency
@@ -191,7 +191,7 @@ class KniffellBot:
         """
         if throw_number >= 4:
             # No more re-rolls allowed after 4th throw
-            best_col, best_row, _ = self._best_placement(board, dice)
+            best_col, best_row, _ = self._best_placement(board, dice, throw_number)
             ev = float(score_dice(dice, ALL_ROWS[best_row]))
             return RerollDecision(
                 kept=dice, reroll=[], target_col=best_col, target_row=best_row,
@@ -240,8 +240,9 @@ class KniffellBot:
     ) -> PlacementDecision:
         """
         After all re-rolls are done, decide the best cell to fill.
+        current_throw enforces Wurf column locking (cannot place in Wurf N if throw < N).
         """
-        col_idx, row_idx, score = self._best_placement(board, dice)
+        col_idx, row_idx, score = self._best_placement(board, dice, current_throw)
         row_name  = ALL_ROWS[row_idx]
         col_label = _col_label(col_idx)
         reasoning = self._placement_reasoning(
@@ -260,11 +261,13 @@ class KniffellBot:
     def _best_placement(
         self, board: Board, dice: list[int], current_throw: int = 1
     ) -> tuple[int, int, int]:
+        """Return (col_idx, row_idx, score) for the best cell to fill now."""
         best_val   = -1e9
-        best_col   = None      # ← was 0
-        best_row   = None      # ← was 0
+        best_col   = None
+        best_row   = None
         best_score = 0
 
+        # Cache score per unique row
         row_score: dict[int, int] = {}
 
         for col_idx in range(NUM_COLS):
@@ -283,7 +286,10 @@ class KniffellBot:
                     best_score = sc
 
         if best_col is None:
-            raise RuntimeError("No valid placement found — board may be complete or throw constraint too tight.")
+            raise RuntimeError(
+                f"No valid placement found at throw {current_throw} — "
+                "all valid columns may be locked or board is complete."
+            )
 
         return best_col, best_row, best_score
 
@@ -312,7 +318,7 @@ class KniffellBot:
         # --- 1. Collect which (col, row) pairs are available ---
         slots: list[tuple[int,int]] = []   # (col_idx, row_idx)
         for col_idx in range(NUM_COLS):
-            for row_idx in board.valid_rows_for_col(col_idx):
+            for row_idx in board.valid_rows_for_col(col_idx, throw_number):
                 slots.append((col_idx, row_idx))
 
         if not slots:
@@ -334,7 +340,7 @@ class KniffellBot:
         for col_idx, row_idx in slots:
             kept, rl, ev, reason = row_cache[row_idx]
             bonus        = _bonus_boost(board, col_idx, row_idx, dice)
-            urgency      = _column_urgency(board, col_idx)
+            urgency      = _column_urgency(board, col_idx, throw_number)
             adjusted_ev  = (ev + bonus) * urgency
 
             if adjusted_ev > best_ev:

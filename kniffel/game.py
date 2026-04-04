@@ -71,6 +71,21 @@ class Game:
             logger.info(f"Turn {self._turn_number}  |  Initial roll: {dice}")
 
         while throw_num <= 4:
+            # Check if there are any valid placements at the current throw number.
+            # If not, we MUST keep rolling to unlock higher-Wurf columns.
+            has_valid_slot = any(
+                self.board.valid_rows_for_col(c, throw_num)
+                for c in range(NUM_COLS)
+            )
+
+            if not has_valid_slot and throw_num < 4:
+                # Force a re-roll (keep all dice) to advance throw counter
+                if self.verbose:
+                    logger.info(f"  Throw {throw_num}: {dice} — no slots available yet, forced re-roll to unlock next Wurf")
+                pass  # keep dice unchanged — just advance throw counter
+                throw_num += 1
+                continue
+
             # Ask bot what to do
             reroll_dec = self.bot.decide_reroll(self.board, dice, throw_num)
             turn_log.reroll_decisions.append(reroll_dec)
@@ -102,5 +117,5 @@ class Game:
             )
 
         # Apply placement
-        self.board.fill(placement.col_idx, placement.row_idx, dice)
+        self.board.fill(placement.col_idx, placement.row_idx, dice, throw_num)
         self.turn_logs.append(turn_log)

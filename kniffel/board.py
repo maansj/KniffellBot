@@ -54,13 +54,20 @@ class Board:
         """Return 1-based throw number for column index."""
         return COLUMNS[col_idx][0]
 
-    def valid_rows_for_col(self, col_idx: int) -> list[int]:
+    def valid_rows_for_col(self, col_idx: int, current_throw: int = 1) -> list[int]:
         """
         Return sorted list of row indices that are currently valid
         (i.e. can be filled next) for the given column.
+
+        A column belonging to Wurf N can only be filled if current_throw >= N.
+        You cannot place in Wurf 1 columns after rolling more than once.
         """
-        col_type = self._col_type(col_idx)
-        throw_idx = self._throw_num(col_idx) - 1
+        col_wurf  = self._throw_num(col_idx)   # 1-based Wurf number of this column
+        if current_throw < col_wurf:
+            return []                           # column locked — haven't reached this Wurf yet
+
+        col_type  = self._col_type(col_idx)
+        throw_idx = col_wurf - 1
 
         if col_type == DOWN:
             ptr = self._down_ptr[throw_idx]
@@ -73,23 +80,24 @@ class Board:
         else:  # FREE
             return [r for r in range(NUM_ROWS) if self.grid[col_idx][r] is None]
 
-    def can_fill(self, col_idx: int, row_idx: int) -> bool:
-        return row_idx in self.valid_rows_for_col(col_idx)
+    def can_fill(self, col_idx: int, row_idx: int, current_throw: int = 1) -> bool:
+        return row_idx in self.valid_rows_for_col(col_idx, current_throw)
 
     # ──────────────────────────────────────────────
     # Fill a cell
     # ──────────────────────────────────────────────
 
-    def fill(self, col_idx: int, row_idx: int, dice: list[int]) -> int:
+    def fill(self, col_idx: int, row_idx: int, dice: list[int], current_throw: int = 1) -> int:
         """
         Fill cell (col_idx, row_idx) with the score for *dice* in that row.
         Returns the score placed (0 if combination didn't qualify).
         Raises ValueError if the cell is not a valid choice.
+        current_throw enforces that Wurf N columns are only fillable after throw N.
         """
-        if not self.can_fill(col_idx, row_idx):
+        if not self.can_fill(col_idx, row_idx, current_throw):
             raise ValueError(
                 f"Cannot fill col={col_idx} row={row_idx} "
-                f"(valid rows: {self.valid_rows_for_col(col_idx)})"
+                f"(valid rows at throw {current_throw}: {self.valid_rows_for_col(col_idx, current_throw)})"
             )
         sc = score_dice(dice, ALL_ROWS[row_idx])
         self.grid[col_idx][row_idx] = sc
