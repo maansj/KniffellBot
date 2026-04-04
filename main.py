@@ -183,6 +183,9 @@ def cmd_interactive(args):
                 else:
                     dice = _ask_dice("  Enter your new full dice set (5 numbers): ")
 
+            # A re-roll happened — advance the throw counter
+            throw_num += 1
+
             throw_num += 1
 
         # ── placement ─────────────────────────────────────────────────────
