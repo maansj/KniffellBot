@@ -258,20 +258,18 @@ class KniffellBot:
     # ──────────────────────────────────────────────
 
     def _best_placement(
-        self, board: Board, dice: list[int]
+        self, board: Board, dice: list[int], current_throw: int = 1
     ) -> tuple[int, int, int]:
-        """Return (col_idx, row_idx, score) for the best cell to fill now."""
         best_val   = -1e9
-        best_col   = 0
-        best_row   = 0
+        best_col   = None      # ← was 0
+        best_row   = None      # ← was 0
         best_score = 0
 
-        # Cache score per unique row
         row_score: dict[int, int] = {}
 
         for col_idx in range(NUM_COLS):
-            urgency = _column_urgency(board, col_idx)
-            for row_idx in board.valid_rows_for_col(col_idx):
+            urgency = _column_urgency(board, col_idx, current_throw)
+            for row_idx in board.valid_rows_for_col(col_idx, current_throw):
                 if row_idx not in row_score:
                     row_score[row_idx] = score_dice(dice, ALL_ROWS[row_idx])
                 sc    = row_score[row_idx]
@@ -283,6 +281,9 @@ class KniffellBot:
                     best_col   = col_idx
                     best_row   = row_idx
                     best_score = sc
+
+        if best_col is None:
+            raise RuntimeError("No valid placement found — board may be complete or throw constraint too tight.")
 
         return best_col, best_row, best_score
 
