@@ -79,11 +79,25 @@ def cmd_log(args):
 def cmd_interactive(args):
     """
     Human plays with bot suggestions.
-    The human rolls the dice themselves and enters the values; the bot
-    advises on re-rolls and placement.
+    Supports two dice modes:
+      - digital: the computer rolls the dice for you
+      - manual:  you enter your own dice values (e.g. from a physical game)
     """
     print("\n🎲  Kniffel Bot — Interactive Mode")
-    print("    You roll the dice; the bot advises.\n")
+    print("    The bot advises on re-rolls and placement.\n")
+
+    # ── ask once which dice mode to use ──────────────────────────────────────
+    while True:
+        mode = input("  Roll dice digitally or enter them manually? [d/m]: ").strip().lower()
+        if mode in ("d", "m"):
+            break
+        print("  Please enter 'd' for digital or 'm' for manual.")
+
+    digital = (mode == "d")
+    if digital:
+        print("  ✅ Digital mode — the computer rolls for you.\n")
+    else:
+        print("  ✅ Manual mode — you enter your dice values yourself.\n")
 
     board = Board()
     bot   = KniffellBot(verbose=True)
@@ -97,7 +111,13 @@ def cmd_interactive(args):
         print(f"  Board so far ({board.filled_count()} / {total_turns} cells filled)")
         print(board.display())
 
-        dice = _ask_dice("  Enter your initial roll (5 numbers separated by spaces): ")
+        # ── initial roll ──────────────────────────────────────────────────
+        if digital:
+            dice = roll_dice()
+            print(f"\n  🎲 Rolling 5 dice ... {dice}")
+        else:
+            dice = _ask_dice("  Enter your initial roll (5 numbers separated by spaces): ")
+
         throw_num = 1
 
         while throw_num <= 4:
@@ -107,15 +127,50 @@ def cmd_interactive(args):
             if not decision.reroll:
                 break
 
-            again = input("  Re-roll as suggested? [Y/n]: ").strip().lower()
-            if again in ("", "y"):
-                dice = reroll(decision.kept, len(decision.reroll))
-                print(f"  New dice: {dice}")
+            # ── ask whether to follow bot advice or do something else ─────
+            if digital:
+                prompt = "  Follow bot's re-roll suggestion? [Y/n/stop]: "
             else:
-                custom = _ask_dice("  Enter your new dice values: ")
-                dice = custom
+                prompt = "  Re-roll as suggested? [Y/n/stop]: "
+
+            answer = input(prompt).strip().lower()
+
+            if answer == "stop":
+                # Player chooses to stop re-rolling early
+                print("  Stopping re-rolls early.")
+                break
+            elif answer in ("", "y"):
+                if digital:
+                    # Computer re-rolls the suggested dice
+                    dice = reroll(decision.kept, len(decision.reroll))
+                    print(f"  🎲 Re-rolling {len(decision.reroll)} dice ... new result: {dice}")
+                else:
+                    # Manual: re-roll suggested but player enters result
+                    dice = reroll(decision.kept, len(decision.reroll))
+                    print(f"  🎲 Suggested re-roll result: {dice}")
+                    override = input("  Use this result or enter your own? [Y/manual]: ").strip().lower()
+                    if override == "manual":
+                        dice = _ask_dice("  Enter your new full dice set (5 numbers): ")
+            else:
+                # Player wants to keep different dice than the bot suggested
+                if digital:
+                    keep_input = input(
+                        f"  Which values do you want to keep from {dice}? "
+                        "(space-separated, or leave blank to re-roll all): "
+                    ).strip()
+                    if keep_input == "":
+                        kept_manual = []
+                    else:
+                        kept_manual = list(map(int, keep_input.split()))
+                    n_reroll = 5 - len(kept_manual)
+                    dice = reroll(kept_manual, n_reroll)
+                    print(f"  🎲 Re-rolling {n_reroll} dice ... new result: {dice}")
+                else:
+                    dice = _ask_dice("  Enter your new full dice set (5 numbers): ")
+
             throw_num += 1
 
+        # ── placement ─────────────────────────────────────────────────────
         placement = bot.decide_placement(board, dice, throw_num)
         print(f"\n  🤖 Bot recommends: {placement.reasoning}")
 
@@ -123,7 +178,6 @@ def cmd_interactive(args):
         if agree in ("", "y"):
             board.fill(placement.col_idx, placement.row_idx, dice)
         else:
-            # Let human choose manually
             _manual_placement(board, dice)
 
     print("\n" + board.display())
