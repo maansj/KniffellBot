@@ -1,0 +1,5 @@
+# Kniffel Bot — Python dependencies
+# No external dependencies required for core functionality.
+# Optional: install pytest for running tests.
+
+pytest>=7.0
