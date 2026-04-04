@@ -138,29 +138,104 @@ class Board:
     # ──────────────────────────────────────────────
 
     def display(self) -> str:
-        """Return a formatted string table of the current scoresheet."""
-        col_labels = []
-        for t, ctype in COLUMNS:
-            symbol = {"DOWN": "↓", "UP": "↑", "FREE": "F"}[ctype]
-            col_labels.append(f"W{t}{symbol}")
+        """
+        Return a formatted scoresheet grouped by throw:
+          W1↓  W1↑  W1F | W2↓  W2↑  W2F | W3↓  W3↑  W3F | W4↓  W4↑  W4F
+        """
+        SYM = {DOWN: "↓", UP: "↑", FREE: "F"}
 
-        header = f"{'Row':<14}" + "".join(f"{lbl:>6}" for lbl in col_labels)
-        lines  = [header, "-" * len(header)]
+        # Build display order: for each throw 1-4, show ↓ ↑ F
+        # Map (throw, ctype) → internal col_idx
+        col_map: dict[tuple, int] = {}
+        for c_idx, (t, ctype) in enumerate(COLUMNS):
+            col_map[(t, ctype)] = c_idx
 
-        for r_idx, row_name in enumerate(ALL_ROWS):
-            row_str = f"{row_name:<14}"
-            for c_idx in range(NUM_COLS):
+        display_order: list[int] = []  # col indices in display order
+        display_labels: list[str] = []
+        for t in range(1, NUM_THROWS + 1):
+            for ctype in (DOWN, UP, FREE):
+                display_order.append(col_map[(t, ctype)])
+                display_labels.append(f"W{t}{SYM[ctype]}")
+
+        COL_W  = 5   # width per data column
+        ROW_W  = 12  # width of row-name column
+
+        # ── header ──────────────────────────────────────────────────────────
+        # Throw group labels  (W1 spans 3 cols, etc.)
+        group_w = COL_W * 3
+        throw_hdr = " " * ROW_W
+        for t in range(1, NUM_THROWS + 1):
+            label = f" Wurf {t} "
+            throw_hdr += label.center(group_w)
+
+        col_hdr = " " * ROW_W
+        for i, lbl in enumerate(display_labels):
+            col_hdr += lbl.center(COL_W)
+            if i % 3 == 2 and i < len(display_labels) - 1:
+                col_hdr += " "   # small gap between throw groups
+
+        sep_inner = "─" * (COL_W * 3)
+        separator = "─" * ROW_W + ("┼" + sep_inner) * NUM_THROWS
+
+        lines = [throw_hdr, col_hdr, separator]
+
+        # ── upper section rows ───────────────────────────────────────────────
+        for r_idx in range(6):
+            row_name = ALL_ROWS[r_idx]
+            row_str  = f"{row_name:<{ROW_W}}"
+            for i, c_idx in enumerate(display_order):
                 val = self.grid[c_idx][r_idx]
-                row_str += f"{'—' if val is None else val:>6}"
+                cell = "·" if val is None else str(val)
+                row_str += cell.center(COL_W)
+                if i % 3 == 2 and i < len(display_order) - 1:
+                    row_str += " "
             lines.append(row_str)
 
-        # Column totals
-        lines.append("-" * len(header))
-        total_str = f"{'TOTAL':<14}"
-        for c_idx in range(NUM_COLS):
-            total_str += f"{self.column_total(c_idx):>6}"
+        # ── bonus row ────────────────────────────────────────────────────────
+        bonus_str = f"{'Bonus':<{ROW_W}}"
+        for i, c_idx in enumerate(display_order):
+            upper_sum = sum(
+                self.grid[c_idx][r] for r in range(6)
+                if self.grid[c_idx][r] is not None
+            )
+            bonus = compute_bonus(upper_sum)
+            # Show bonus value only once all upper rows in the column are filled,
+            # otherwise show the running deficit / earned amount
+            filled_upper = sum(1 for r in range(6) if self.grid[c_idx][r] is not None)
+            if filled_upper == 6:
+                cell = str(bonus)
+            else:
+                needed = max(0, UPPER_BONUS_THRESHOLD - upper_sum)
+                cell = f"-{needed}" if needed > 0 else "+35"
+            bonus_str += cell.center(COL_W)
+            if i % 3 == 2 and i < len(display_order) - 1:
+                bonus_str += " "
+        lines.append(bonus_str)
+
+        lines.append(separator)
+
+        # ── lower section rows ───────────────────────────────────────────────
+        for r_idx in range(6, NUM_ROWS):
+            row_name = ALL_ROWS[r_idx]
+            row_str  = f"{row_name:<{ROW_W}}"
+            for i, c_idx in enumerate(display_order):
+                val = self.grid[c_idx][r_idx]
+                cell = "·" if val is None else str(val)
+                row_str += cell.center(COL_W)
+                if i % 3 == 2 and i < len(display_order) - 1:
+                    row_str += " "
+            lines.append(row_str)
+
+        lines.append(separator)
+
+        # ── column totals ────────────────────────────────────────────────────
+        total_str = f"{'TOTAL':<{ROW_W}}"
+        for i, c_idx in enumerate(display_order):
+            total_str += str(self.column_total(c_idx)).center(COL_W)
+            if i % 3 == 2 and i < len(display_order) - 1:
+                total_str += " "
         lines.append(total_str)
-        lines.append(f"\nGrand Total: {self.grand_total()}")
+        lines.append(f"\n  Grand Total: {self.grand_total()} pts")
         return "\n".join(lines)
 
     def clone(self) -> "Board":
