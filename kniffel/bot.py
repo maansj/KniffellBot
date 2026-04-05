@@ -177,25 +177,57 @@ class KniffellBot:
     # Public API
     # ──────────────────────────────────────────────
 
-    def choose_target_wurf(self, board: Board) -> int:
+    def choose_target_wurf(self, board: Board, dice: list[int]) -> int:
         """
-        Decide which Wurf (1-4) to target this turn.
-        Picks the Wurf with the most remaining slots, breaking ties by
-        preferring higher Wurf numbers (more re-rolls = more control).
-        Returns a Wurf number 1-4 that still has unfilled slots.
+        Given the first roll of this turn, freely choose which Wurf (1-4) to
+        target this turn — any Wurf with open slots is always a valid choice.
+
+        Strategy: for each Wurf N with open slots, compute the best expected
+        score achievable given N-1 re-rolls from the current dice. Pick the
+        Wurf with the highest expected score.
+
+        There is NO requirement to fill one Wurf before another — the bot
+        freely picks the best opportunity each turn. All slots must be filled
+        by the end of the game (scored 0 if needed).
         """
-        best_wurf  = None
-        best_slots = -1
+        from kniffel.dice_utils import best_keep_for_row
+        from kniffel.scoring import score_dice as _sd
+
+        best_wurf = None
+        best_ev   = -1.0
+
         for wurf in range(1, 5):
-            # Count available slots at this Wurf
-            slots = sum(
-                len(board.valid_rows_for_col(c, wurf))
-                for c in range(NUM_COLS)
-            )
-            # Prefer the Wurf with most remaining slots; tie-break: higher Wurf
-            if slots > 0 and (best_wurf is None or slots >= best_slots):
-                best_slots = slots
-                best_wurf  = wurf
+            # Collect available slots for this Wurf
+            slots = [
+                (col_idx, row_idx)
+                for col_idx in range(NUM_COLS)
+                for row_idx in board.valid_rows_for_col(col_idx, wurf)
+            ]
+            if not slots:
+                continue  # Wurf fully filled — skip
+
+            rerolls_available = wurf - 1  # Wurf 1 = 0 re-rolls, Wurf 4 = 3 re-rolls
+
+            # Find best EV across all slots in this Wurf
+            wurf_best_ev = 0.0
+            for col_idx, row_idx in slots:
+                row_name = ALL_ROWS[row_idx]
+
+                # EV after optimal keep + rerolls_available re-rolls
+                _, _, ev, _ = best_keep_for_row(dice, row_name, _sd)
+                # Each extra re-roll beyond 1 improves EV — scale upward slightly
+                ev_scaled = ev * (1.0 + 0.08 * rerolls_available)
+                bonus     = _bonus_boost(board, col_idx, row_idx, dice)
+                urgency   = _column_urgency(board, col_idx, wurf)
+                slot_ev   = (ev_scaled + bonus) * urgency
+
+                if slot_ev > wurf_best_ev:
+                    wurf_best_ev = slot_ev
+
+            if wurf_best_ev > best_ev:
+                best_ev   = wurf_best_ev
+                best_wurf = wurf
+
         if best_wurf is None:
             raise RuntimeError("No Wurf has remaining slots — board is complete.")
         return best_wurf

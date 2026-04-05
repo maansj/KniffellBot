@@ -66,20 +66,20 @@ class Game:
             logger.info(f"\n{'='*60}")
             logger.info(f"Turn {self._turn_number}")
 
-        # --- Step 1: choose target Wurf number for this turn ---
-        # The bot picks which Wurf (1-4) to aim for based on available slots
-        # and dice strategy. This determines how many times we will roll.
-        target_wurf = self.bot.choose_target_wurf(self.board)
-
-        if self.verbose:
-            logger.info(f"  Target: Wurf {target_wurf} (will roll {target_wurf} time(s))")
-
-        # --- Step 2: roll dice exactly target_wurf times ---
-        dice = roll_dice()
+        # --- Step 1: initial roll ---
+        dice      = roll_dice()
         throw_num = 1
 
         if self.verbose:
             logger.info(f"  Roll 1: {dice}")
+
+        # --- Step 2: choose target Wurf based on the actual first roll ---
+        # The bot sees the dice and decides how many total rolls to make (1-4),
+        # which determines which Wurf column it will fill this turn.
+        target_wurf = self.bot.choose_target_wurf(self.board, dice)
+
+        if self.verbose:
+            logger.info(f"  → Targeting Wurf {target_wurf} (will roll {target_wurf} time(s) total)")
 
         while throw_num < target_wurf:
             # Ask bot which dice to keep for the re-roll

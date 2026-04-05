@@ -1,17 +1,12 @@
 #!/usr/bin/env python3
 """
-main.py
-=======
-Entry point for the Kniffel bot.
+main.py - Entry point for the Kniffel bot.
 
-Modes
------
-  python main.py demo          – play one verbose game, print board + reasoning
-  python main.py simulate N    – run N silent games, print score statistics
+Modes:
+  python main.py demo          – play one verbose game
+  python main.py simulate N    – run N silent games, print statistics
   python main.py log           – play one game, save full JSON turn log
   python main.py interactive   – human plays with bot suggestions
-
-Run  python main.py --help  for details.
 """
 
 import argparse
@@ -20,7 +15,6 @@ import sys
 from pathlib import Path
 from datetime import datetime
 
-# ── project imports ───────────────────────────────────────────────────────────
 from kniffel.board import Board
 from kniffel.bot import KniffellBot
 from kniffel.game import Game
@@ -28,15 +22,9 @@ from kniffel.stats import (
     run_simulations, summarise, print_summary, ascii_histogram, save_game_log,
 )
 from kniffel.dice_utils import roll_dice, reroll
-from kniffel.constants import ALL_ROWS, COLUMNS, DOWN, UP, FREE
+from kniffel.constants import ALL_ROWS, COLUMNS, DOWN, UP, FREE, NUM_COLS
 
-
-# ── logging setup ─────────────────────────────────────────────────────────────
-logging.basicConfig(
-    level  = logging.INFO,
-    format = "%(message)s",
-    stream = sys.stdout,
-)
+logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
 logger = logging.getLogger(__name__)
 
 
@@ -45,7 +33,6 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────────────────────────────────────
 
 def cmd_demo(args):
-    """Play one game with full verbose output."""
     print("\n🎲  Kniffel Bot — Demo Game\n")
     g = Game(verbose=True)
     r = g.play_full_game()
@@ -54,17 +41,15 @@ def cmd_demo(args):
 
 
 def cmd_simulate(args):
-    """Run N silent games and print statistics."""
     n = int(args.n)
     print(f"\n🎲  Simulating {n} games …\n")
-    results  = run_simulations(n, verbose=False)
-    summary  = summarise(results)
+    results = run_simulations(n, verbose=False)
+    summary = summarise(results)
     print_summary(summary)
     print(ascii_histogram(summary["scores"]))
 
 
 def cmd_log(args):
-    """Play one game and save a full JSON turn log."""
     print("\n🎲  Playing one game and saving log …\n")
     g = Game(verbose=False)
     r = g.play_full_game()
@@ -79,14 +64,19 @@ def cmd_log(args):
 def cmd_interactive(args):
     """
     Human plays with bot suggestions.
-    Supports two dice modes:
-      - digital: the computer rolls the dice for you
-      - manual:  you enter your own dice values (e.g. from a physical game)
+
+    Each turn:
+      1. Roll dice (digitally or enter manually)
+      2. Bot recommends which Wurf (1-4) to target — i.e. how many rolls to take
+         Wurf 1 = place immediately, Wurf 2 = re-roll once, etc.
+      3. Re-roll the suggested dice (up to target_wurf - 1 times)
+      4. Bot recommends where to place; player can accept or override
     """
     print("\n🎲  Kniffel Bot — Interactive Mode")
-    print("    The bot advises on re-rolls and placement.\n")
+    print("    The bot advises on which Wurf to target, re-rolls, and placement.\n")
+    print("  Reminder: Wurf N = you rolled exactly N times this turn.")
+    print("  Wurf 1 cols = placed after 1 roll, Wurf 2 = after 2 rolls, etc.\n")
 
-    # ── ask once which dice mode to use ──────────────────────────────────────
     while True:
         mode = input("  Roll dice digitally or enter them manually? [d/m]: ").strip().lower()
         if mode in ("d", "m"):
@@ -94,109 +84,94 @@ def cmd_interactive(args):
         print("  Please enter 'd' for digital or 'm' for manual.")
 
     digital = (mode == "d")
-    if digital:
-        print("  ✅ Digital mode — the computer rolls for you.\n")
-    else:
-        print("  ✅ Manual mode — you enter your dice values yourself.\n")
+    print(f"  ✅ {'Digital' if digital else 'Manual'} mode.\n")
 
-    board = Board()
-    bot   = KniffellBot(verbose=True)
-    turn  = 0
+    board      = Board()
+    bot        = KniffellBot(verbose=True)
+    turn       = 0
     total_turns = len(COLUMNS) * len(ALL_ROWS)
 
     while not board.is_complete():
         turn += 1
         print(f"\n{'─'*60}")
-        print(f"  Turn {turn} / {total_turns}")
-        print(f"  Board so far ({board.filled_count()} / {total_turns} cells filled)")
+        print(f"  Turn {turn} / {total_turns}  "
+              f"({board.filled_count()} / {total_turns} cells filled)")
         print(board.display())
 
-        # ── initial roll ──────────────────────────────────────────────────
+        # ── Step 1: initial roll ──────────────────────────────────────────
         if digital:
             dice = roll_dice()
-            print(f"\n  🎲 Rolling 5 dice ... {dice}")
+            print(f"\n  🎲 Roll 1: {dice}")
         else:
-            dice = _ask_dice("  Enter your initial roll (5 numbers separated by spaces): ")
+            dice = _ask_dice("  Enter your initial roll (5 numbers, space-separated): ")
 
-        throw_num     = 1
-        decision_made = False
+        # ── Step 2: bot recommends target Wurf ───────────────────────────
+        target_wurf = bot.choose_target_wurf(board, dice)
+        rerolls_needed = target_wurf - 1
+        if rerolls_needed == 0:
+            wurf_desc = "place now — no re-rolls"
+        elif rerolls_needed == 1:
+            wurf_desc = "re-roll once"
+        else:
+            wurf_desc = f"re-roll {rerolls_needed} times"
+        print(f"\n  🤖 Bot recommends Wurf {target_wurf} ({wurf_desc})")
 
-        while throw_num <= 4:
-            # If no slots are available yet at this throw, must keep rolling
-            from kniffel.constants import NUM_COLS
-            has_valid_slot = any(
-                board.valid_rows_for_col(c, throw_num) for c in range(NUM_COLS)
-            )
-            if not has_valid_slot and throw_num < 4:
-                print(f"\n  ⚠️  No slots available at throw {throw_num} — all Wurf {throw_num} columns are full.")
-                print(f"  Advancing to throw {throw_num + 1} to unlock Wurf {throw_num + 1} columns...")
-                if digital:
-                    dice = roll_dice() if not decision_made else dice
-                throw_num += 1
-                continue
+        # Player can override
+        resp = input(f"  Use Wurf {target_wurf}? [Y / type 1-4 to override]: ").strip()
+        if resp in ("1", "2", "3", "4"):
+            chosen = int(resp)
+            if any(board.valid_rows_for_col(c, chosen) for c in range(NUM_COLS)):
+                target_wurf = chosen
+                print(f"  → Overridden to Wurf {target_wurf}")
+            else:
+                print(f"  ⚠️  Wurf {chosen} is fully filled — keeping Wurf {target_wurf}")
 
-            decision = bot.decide_reroll(board, dice, throw_num)
-            decision_made = True
+        # ── Step 3: re-roll loop (exactly target_wurf - 1 re-rolls) ──────
+        throw_num = 1
+        while throw_num < target_wurf:
+            decision = bot.decide_reroll(board, dice, throw_num, target_wurf)
             print(f"\n  🤖 Bot says: {decision.reasoning}")
 
-            if not decision.reroll:
-                break
+            answer = input(
+                "  Follow bot's suggestion? [Y/n]: "
+                if digital else
+                "  Re-roll as suggested? [Y/n]: "
+            ).strip().lower()
 
-            # ── ask whether to follow bot advice or do something else ─────
-            if digital:
-                prompt = "  Follow bot's re-roll suggestion? [Y/n/stop]: "
-            else:
-                prompt = "  Re-roll as suggested? [Y/n/stop]: "
-
-            answer = input(prompt).strip().lower()
-
-            if answer == "stop":
-                # Player chooses to stop re-rolling early
-                print("  Stopping re-rolls early.")
-                break
-            elif answer in ("", "y"):
+            if answer in ("", "y"):
                 if digital:
-                    # Computer re-rolls the suggested dice
                     dice = reroll(decision.kept, len(decision.reroll))
-                    print(f"  🎲 Re-rolling {len(decision.reroll)} dice ... new result: {dice}")
+                    print(f"  🎲 Re-rolling {len(decision.reroll)} dice ... {dice}")
                 else:
-                    # Manual: re-roll suggested but player enters result
                     dice = reroll(decision.kept, len(decision.reroll))
-                    print(f"  🎲 Suggested re-roll result: {dice}")
-                    override = input("  Use this result or enter your own? [Y/manual]: ").strip().lower()
-                    if override == "manual":
-                        dice = _ask_dice("  Enter your new full dice set (5 numbers): ")
+                    print(f"  🎲 Suggested result: {dice}")
+                    if input("  Use this or enter your own? [Y/manual]: ").strip().lower() == "manual":
+                        dice = _ask_dice("  Enter your new dice (5 numbers): ")
             else:
-                # Player wants to keep different dice than the bot suggested
                 if digital:
                     keep_input = input(
-                        f"  Which values do you want to keep from {dice}? "
-                        "(space-separated, or leave blank to re-roll all): "
+                        f"  Which values to keep from {dice}? "
+                        "(space-separated, blank = re-roll all): "
                     ).strip()
-                    if keep_input == "":
-                        kept_manual = []
-                    else:
-                        kept_manual = list(map(int, keep_input.split()))
-                    n_reroll = 5 - len(kept_manual)
-                    dice = reroll(kept_manual, n_reroll)
-                    print(f"  🎲 Re-rolling {n_reroll} dice ... new result: {dice}")
+                    kept_manual = list(map(int, keep_input.split())) if keep_input else []
+                    dice = reroll(kept_manual, 5 - len(kept_manual))
+                    print(f"  🎲 Re-rolling {5 - len(kept_manual)} dice ... {dice}")
                 else:
-                    dice = _ask_dice("  Enter your new full dice set (5 numbers): ")
-
-            # A re-roll happened — advance the throw counter
-            throw_num += 1
+                    dice = _ask_dice("  Enter your new dice (5 numbers): ")
 
             throw_num += 1
+            if throw_num < target_wurf:
+                print(f"  (Throw {throw_num} of {target_wurf})")
 
-        # ── placement ─────────────────────────────────────────────────────
-        placement = bot.decide_placement(board, dice, throw_num)
+        # ── Step 4: placement ─────────────────────────────────────────────
+        placement = bot.decide_placement(board, dice, target_wurf)
         print(f"\n  🤖 Bot recommends: {placement.reasoning}")
 
         agree = input("  Accept placement? [Y/n]: ").strip().lower()
         if agree in ("", "y"):
-            board.fill(placement.col_idx, placement.row_idx, dice, throw_num)
+            board.fill(placement.col_idx, placement.row_idx, dice, target_wurf)
         else:
-            _manual_placement(board, dice, throw_num)
+            _manual_placement(board, dice, target_wurf)
 
     print("\n" + board.display())
     print(f"\n🏆  Final grand total: {board.grand_total()} pts")
@@ -227,6 +202,10 @@ def _manual_placement(board: Board, dice: list[int], current_throw: int = 1):
             options.append((c, r))
             print(f"  [{len(options)-1:>3}] Wurf{throw_n}[{sym}] / {row_name:<15} → {sc} pts")
 
+    if not options:
+        print("  No valid placements at this Wurf — accepting bot placement instead.")
+        return
+
     while True:
         try:
             idx = int(input("  Choose option number: "))
@@ -245,36 +224,20 @@ def _manual_placement(board: Board, dice: list[int], current_throw: int = 1):
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog        = "kniffel_bot",
-        description = "Kniffel AI Bot — demo, simulate, log, or play interactively.",
+        prog="kniffel_bot",
+        description="Kniffel AI Bot — demo, simulate, log, or play interactively.",
     )
     sub = p.add_subparsers(dest="command", required=True)
-
-    sub.add_parser("demo",
-        help="Play one verbose demo game and print the reasoning.")
-
-    sim = sub.add_parser("simulate",
-        help="Run N silent games and print score statistics.")
-    sim.add_argument("n", nargs="?", default=50,
-        help="Number of games to simulate (default: 50)")
-
-    sub.add_parser("log",
-        help="Play one game and save a full JSON turn log to logs/.")
-
-    sub.add_parser("interactive",
-        help="Human plays with bot suggestions — enter your own dice rolls.")
-
+    sub.add_parser("demo", help="Play one verbose demo game.")
+    sim = sub.add_parser("simulate", help="Run N silent games and print statistics.")
+    sim.add_argument("n", nargs="?", default=50, help="Number of games (default: 50)")
+    sub.add_parser("log", help="Play one game and save a JSON turn log.")
+    sub.add_parser("interactive", help="Human plays with bot coaching.")
     return p
 
 
 if __name__ == "__main__":
     parser = build_parser()
     args   = parser.parse_args()
-
-    dispatch = {
-        "demo":        cmd_demo,
-        "simulate":    cmd_simulate,
-        "log":         cmd_log,
-        "interactive": cmd_interactive,
-    }
-    dispatch[args.command](args)
+    {"demo": cmd_demo, "simulate": cmd_simulate,
+     "log": cmd_log, "interactive": cmd_interactive}[args.command](args)
