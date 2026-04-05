@@ -59,12 +59,15 @@ class Board:
         Return sorted list of row indices that are currently valid
         (i.e. can be filled next) for the given column.
 
-        A column belonging to Wurf N can only be filled if current_throw >= N.
-        You cannot place in Wurf 1 columns after rolling more than once.
+        Wurf N columns can ONLY be filled when current_throw == N exactly.
+        - Wurf 1: placed after rolling once (no re-rolls)
+        - Wurf 2: placed after rolling twice (1 re-roll)
+        - Wurf 3: placed after rolling three times (2 re-rolls)
+        - Wurf 4: placed after rolling four times (3 re-rolls)
         """
         col_wurf  = self._throw_num(col_idx)   # 1-based Wurf number of this column
-        if current_throw < col_wurf:
-            return []                           # column locked — haven't reached this Wurf yet
+        if current_throw != col_wurf:
+            return []                           # must match exactly
 
         col_type  = self._col_type(col_idx)
         throw_idx = col_wurf - 1

@@ -62,50 +62,48 @@ class Game:
         self._turn_number += 1
         turn_log = TurnLog(turn_number=self._turn_number)
 
-        # Initial roll
-        dice        = roll_dice()
-        throw_num   = 1
-
         if self.verbose:
             logger.info(f"\n{'='*60}")
-            logger.info(f"Turn {self._turn_number}  |  Initial roll: {dice}")
+            logger.info(f"Turn {self._turn_number}")
 
-        while throw_num <= 4:
-            # Check if there are any valid placements at the current throw number.
-            # If not, we MUST keep rolling to unlock higher-Wurf columns.
-            has_valid_slot = any(
-                self.board.valid_rows_for_col(c, throw_num)
-                for c in range(NUM_COLS)
-            )
+        # --- Step 1: choose target Wurf number for this turn ---
+        # The bot picks which Wurf (1-4) to aim for based on available slots
+        # and dice strategy. This determines how many times we will roll.
+        target_wurf = self.bot.choose_target_wurf(self.board)
 
-            if not has_valid_slot and throw_num < 4:
-                # Force a re-roll (keep all dice) to advance throw counter
-                if self.verbose:
-                    logger.info(f"  Throw {throw_num}: {dice} — no slots available yet, forced re-roll to unlock next Wurf")
-                pass  # keep dice unchanged — just advance throw counter
-                throw_num += 1
-                continue
+        if self.verbose:
+            logger.info(f"  Target: Wurf {target_wurf} (will roll {target_wurf} time(s))")
 
-            # Ask bot what to do
-            reroll_dec = self.bot.decide_reroll(self.board, dice, throw_num)
+        # --- Step 2: roll dice exactly target_wurf times ---
+        dice = roll_dice()
+        throw_num = 1
+
+        if self.verbose:
+            logger.info(f"  Roll 1: {dice}")
+
+        while throw_num < target_wurf:
+            # Ask bot which dice to keep for the re-roll
+            reroll_dec = self.bot.decide_reroll(self.board, dice, throw_num, target_wurf)
             turn_log.reroll_decisions.append(reroll_dec)
 
             if self.verbose:
-                logger.info(f"  Throw {throw_num}: {dice}")
                 logger.info(f"  🤖 {reroll_dec.reasoning}")
 
-            # Stop if bot keeps everything or last throw
-            if not reroll_dec.reroll or throw_num == 4:
-                break
-
-            # Re-roll
             dice      = reroll(reroll_dec.kept, len(reroll_dec.reroll))
             throw_num += 1
 
+            if self.verbose:
+                logger.info(f"  Roll {throw_num}: {dice}")
+
+        # Record a final "no reroll" decision for logging
+        if throw_num == target_wurf:
+            final_dec = self.bot.decide_reroll(self.board, dice, throw_num, target_wurf)
+            turn_log.reroll_decisions.append(final_dec)
+
         turn_log.final_dice = dice
 
-        # Placement decision
-        placement = self.bot.decide_placement(self.board, dice, throw_num)
+        # --- Step 3: place in Wurf target_wurf ---
+        placement = self.bot.decide_placement(self.board, dice, target_wurf)
         turn_log.placement = placement
 
         if self.verbose:
@@ -116,6 +114,5 @@ class Game:
                 f"Grand total so far: {self.board.grand_total() + placement.score}"
             )
 
-        # Apply placement
-        self.board.fill(placement.col_idx, placement.row_idx, dice, throw_num)
+        self.board.fill(placement.col_idx, placement.row_idx, dice, target_wurf)
         self.turn_logs.append(turn_log)

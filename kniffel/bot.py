@@ -177,52 +177,67 @@ class KniffellBot:
     # Public API
     # ──────────────────────────────────────────────
 
+    def choose_target_wurf(self, board: Board) -> int:
+        """
+        Decide which Wurf (1-4) to target this turn.
+        Picks the Wurf with the most remaining slots, breaking ties by
+        preferring higher Wurf numbers (more re-rolls = more control).
+        Returns a Wurf number 1-4 that still has unfilled slots.
+        """
+        best_wurf  = None
+        best_slots = -1
+        for wurf in range(1, 5):
+            # Count available slots at this Wurf
+            slots = sum(
+                len(board.valid_rows_for_col(c, wurf))
+                for c in range(NUM_COLS)
+            )
+            # Prefer the Wurf with most remaining slots; tie-break: higher Wurf
+            if slots > 0 and (best_wurf is None or slots >= best_slots):
+                best_slots = slots
+                best_wurf  = wurf
+        if best_wurf is None:
+            raise RuntimeError("No Wurf has remaining slots — board is complete.")
+        return best_wurf
+
     def decide_reroll(
         self,
         board: Board,
         dice: list[int],
-        throw_number: int,    # 1-based, current throw number
+        throw_number: int,      # 1-based current throw (how many times rolled so far)
+        target_wurf: int = 0,   # if >0, we MUST roll exactly this many times total
     ) -> RerollDecision:
         """
-        Given current *dice* and *board* state, decide which dice to keep
-        and which to re-roll.
+        Given current *dice*, decide which dice to keep for the next roll.
 
-        Returns RerollDecision with `reroll=[]` if the bot prefers to stop.
+        When target_wurf is set (game simulation), the bot knows exactly which
+        Wurf column it will fill and optimises dice for that target.
+        Returns reroll=[] when at the final throw for this turn.
         """
-        if throw_number >= 4:
-            # No more re-rolls allowed after 4th throw
-            best_col, best_row, _ = self._best_placement(board, dice, throw_number)
-            ev = float(score_dice(dice, ALL_ROWS[best_row]))
+        # Effective target: if target_wurf set, use it; else use current throw
+        wurf = target_wurf if target_wurf > 0 else throw_number
+        is_final_throw = (throw_number >= wurf)
+
+        if is_final_throw:
+            # Time to place — no more re-rolls
+            try:
+                best_col, best_row, sc = self._best_placement(board, dice, wurf)
+            except RuntimeError:
+                best_col, best_row, sc = self._best_placement_any(board, dice)
             return RerollDecision(
                 kept=dice, reroll=[], target_col=best_col, target_row=best_row,
-                expected_value=ev, throw_number=throw_number,
+                expected_value=float(sc), throw_number=throw_number,
                 reasoning=(
-                    f"Throw {throw_number} is the final throw — "
-                    f"no more re-rolls available. Will place in "
-                    f"{_col_label(best_col)} / {ALL_ROWS[best_row]} "
-                    f"for {int(ev)} pts."
+                    f"Final roll for Wurf {wurf}. "
+                    f"Placing in {_col_label(best_col)} / {ALL_ROWS[best_row]} "
+                    f"for {int(sc)} pts."
                 ),
             )
 
-        # Pick the best (col, row, keep_strategy) across all available slots
+        # Still have rolls remaining — pick best keep strategy targeting this Wurf
         best_kept, best_reroll, best_ev, best_col, best_row, reasoning = (
-            self._best_reroll_strategy(board, dice, throw_number)
+            self._best_reroll_strategy(board, dice, throw_number, target_wurf=wurf)
         )
-
-        current_best_score = score_dice(dice, ALL_ROWS[best_row])
-        # Stop early if keeping all dice already scores well
-        if not best_reroll or current_best_score >= best_ev * 0.95:
-            return RerollDecision(
-                kept=dice, reroll=[],
-                target_col=best_col, target_row=best_row,
-                expected_value=float(current_best_score),
-                throw_number=throw_number,
-                reasoning=(
-                    f"Current dice {dice} already score {current_best_score} pts "
-                    f"in '{ALL_ROWS[best_row]}' — not worth re-rolling. "
-                    f"Stopping here."
-                ),
-            )
 
         return RerollDecision(
             kept=best_kept, reroll=best_reroll,
@@ -239,10 +254,15 @@ class KniffellBot:
         current_throw: int = 4,
     ) -> PlacementDecision:
         """
-        After all re-rolls are done, decide the best cell to fill.
-        current_throw enforces Wurf column locking (cannot place in Wurf N if throw < N).
+        After all re-rolls are done, place in the Wurf column matching current_throw.
+        Falls back to _best_placement_any if the exact Wurf is fully filled.
         """
-        col_idx, row_idx, score = self._best_placement(board, dice, current_throw)
+        current_throw = min(current_throw, 4)  # clamp to valid range
+        try:
+            col_idx, row_idx, score = self._best_placement(board, dice, current_throw)
+        except RuntimeError:
+            # Wurf N is full — use any available slot (edge case late in game)
+            col_idx, row_idx, score = self._best_placement_any(board, dice)
         row_name  = ALL_ROWS[row_idx]
         col_label = _col_label(col_idx)
         reasoning = self._placement_reasoning(
@@ -257,6 +277,19 @@ class KniffellBot:
     # ──────────────────────────────────────────────
     # Internal: best placement
     # ──────────────────────────────────────────────
+
+    def _best_placement_any(self, board: Board, dice: list[int]) -> tuple[int, int, int]:
+        """
+        Fallback: find best placement ignoring Wurf restrictions.
+        Used only when forced into a corner (e.g. all Wurf 4 cols are full
+        but the game is not yet complete — should not happen in normal play).
+        """
+        for throw in range(1, 5):
+            try:
+                return self._best_placement(board, dice, throw)
+            except RuntimeError:
+                continue
+        raise RuntimeError("Board appears complete — no placement possible.")
 
     def _best_placement(
         self, board: Board, dice: list[int], current_throw: int = 1
@@ -302,24 +335,23 @@ class KniffellBot:
         board: Board,
         dice: list[int],
         throw_number: int,
+        target_wurf: int = 0,
     ) -> tuple[list[int], list[int], float, int, int, str]:
         """
-        For every available (col, row) slot, compute the best keep strategy
-        and expected value.  Return the overall best.
-
-        Optimisation: we group slots by *row* first (same row → same EV calc),
-        compute best_keep_for_row once per unique row, then apply per-slot
-        multipliers.
+        Compute the best keep strategy targeting the given Wurf.
+        If target_wurf is set, only consider slots in that Wurf column.
 
         Returns
         -------
         (kept, reroll, ev, best_col, best_row, reasoning)
         """
-        # --- 1. Collect which (col, row) pairs are available ---
-        slots: list[tuple[int,int]] = []   # (col_idx, row_idx)
-        for col_idx in range(NUM_COLS):
-            for row_idx in board.valid_rows_for_col(col_idx, throw_number):
-                slots.append((col_idx, row_idx))
+        # --- 1. Collect target (col, row) pairs ---
+        slots: list[tuple[int,int]] = []
+        wurf_to_check = [target_wurf] if target_wurf > 0 else list(range(throw_number, 5))
+        for wurf in wurf_to_check:
+            for col_idx in range(NUM_COLS):
+                for row_idx in board.valid_rows_for_col(col_idx, wurf):
+                    slots.append((col_idx, row_idx))
 
         if not slots:
             return dice, [], 0.0, 0, 0, "No slots available."
